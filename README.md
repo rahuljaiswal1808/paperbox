@@ -74,7 +74,7 @@ step turns it on:
    **GitHub Actions**.
 
 That's it — every push to the default branch rebuilds and redeploys, and the
-site appears at `https://<user>.github.io/<repo>/`. You can also trigger it by
+site appears at `https://rahuljaiswal1808.github.io/paperbox/`. You can also trigger it by
 hand from the **Actions** tab (*Deploy to GitHub Pages → Run workflow*).
 
 The workflow passes the repository's public path to the build as `PAGES_BASE`,
@@ -87,8 +87,8 @@ root and needs nothing at all.
 To reproduce a Pages build locally:
 
 ```bash
-PAGES_BASE=/pdfeditor npm run build
-PAGES_BASE=/pdfeditor npm run preview   # http://localhost:4173/pdfeditor/
+PAGES_BASE=/paperbox npm run build
+PAGES_BASE=/paperbox npm run preview   # http://localhost:4173/paperbox/
 ```
 
 Hosting the app publicly does not expose anyone's documents: the deployed
