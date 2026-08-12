@@ -64,6 +64,44 @@ npm run preview # serve the production build
 `dist/` is a static bundle. Any static host — or a local file server — will do;
 there is nothing to deploy behind it.
 
+### Hosting on GitHub Pages
+
+A workflow is already committed at `.github/workflows/deploy.yml`. One manual
+step turns it on:
+
+1. Push this branch and merge it into the default branch.
+2. Go to **Settings → Pages → Build and deployment** and set **Source** to
+   **GitHub Actions**.
+
+That's it — every push to the default branch rebuilds and redeploys, and the
+site appears at `https://<user>.github.io/<repo>/`. You can also trigger it by
+hand from the **Actions** tab (*Deploy to GitHub Pages → Run workflow*).
+
+The workflow passes the repository's public path to the build as `PAGES_BASE`,
+which becomes Vite's `base`. Every runtime URL — the pdf.js worker, standard
+fonts, CMaps, wasm decoders and the service-worker scope — is derived from
+`import.meta.env.BASE_URL`, so a project site under `/<repo>/` works with no
+other changes. A user/org site (a repo named `<user>.github.io`) serves from the
+root and needs nothing at all.
+
+To reproduce a Pages build locally:
+
+```bash
+PAGES_BASE=/pdfeditor npm run build
+PAGES_BASE=/pdfeditor npm run preview   # http://localhost:4173/pdfeditor/
+```
+
+Hosting the app publicly does not expose anyone's documents: the deployed
+artefact is just HTML, JS and wasm. Every PDF stays in the visitor's browser,
+because there is nowhere else for it to go.
+
+### Other hosts
+
+Any static host works the same way — Netlify, Cloudflare Pages, S3, nginx, or a
+folder served by `npx serve dist`. Set `PAGES_BASE` only if the app lives in a
+subdirectory. Opening `dist/index.html` straight off disk with `file://` will
+*not* work: module workers and the service worker need a real HTTP origin.
+
 ### Tests
 
 ```bash
