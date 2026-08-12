@@ -1,0 +1,61 @@
+name: Deploy to GitHub Pages
+
+# Paperbox builds to a static bundle with no backend, so Pages can host it as-is.
+# Enable it once under Settings → Pages → Build and deployment → Source:
+# "GitHub Actions". After that every push to the default branch redeploys.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish; queue at most one more.
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      # `npm ci` also vendors pdf.js's runtime assets into public/pdfjs via the
+      # postinstall hook, which is what the service worker precaches.
+      - run: npm ci
+
+      - run: npm run lint
+
+      - name: Build
+        env:
+          # "/pdfeditor" for a project site, empty for a user/org site.
+          PAGES_BASE: ${{ steps.pages.outputs.base_path }}
+        run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
