@@ -137,6 +137,7 @@ src/
       export.ts            the writer: model → PDF bytes (DOM-free)
       fonts.ts             standard-font mapping and WinAnsi folding
       textLayout.ts        word wrap shared by the canvas and the writer
+      measure.ts           canvas metrics; matches replacement text to a font
     ops/                   documents, pages, decoration, conversion, repair, OCR hook
     worker/                the PDF worker and its RPC client
     storage/db.ts          IndexedDB: sessions, recents, signatures, prefs
@@ -191,8 +192,10 @@ These are design decisions, and the UI says so where it matters:
 - **Editing existing text** places an opaque box over the original line and lets
   you retype it; it does not reflow the source paragraph. Reflowing text inside
   an arbitrary content stream is not something any browser-side library does
-  reliably. The original characters remain in the file underneath — use
-  **Redact** when they must actually be removed.
+  reliably. The box is matched to what it covers — same position, same baseline,
+  and the closest family and weight we can measure — but the original characters
+  remain in the file underneath, so use **Redact** when they must actually be
+  removed.
 - **New text** uses the 14 standard PDF fonts. Characters outside WinAnsi are
   folded (curly quotes, dashes, ellipses) or substituted, and the export warns
   when that happens.

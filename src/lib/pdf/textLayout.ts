@@ -22,6 +22,8 @@ export function layoutText(
   style: TextStyle,
   boxWidth: number,
   measure: Measurer,
+  /** Distance from the box top to the first baseline; defaults to 0.8em. */
+  firstBaseline?: number,
 ): LaidOutLine[] {
   const lineHeight = style.size * style.lineHeight;
   const lines: { text: string; width: number }[] = [];
@@ -54,8 +56,9 @@ export function layoutText(
       text: line.text,
       width: line.width,
       x,
-      // Baseline sits at ~80% of the em box, matching canvas' alphabetic baseline.
-      baseline: index * lineHeight + style.size * 0.8,
+      // Baseline sits at ~80% of the em box by default, matching canvas'
+      // alphabetic baseline; callers replacing existing text pass the exact one.
+      baseline: index * lineHeight + (firstBaseline ?? style.size * 0.8),
     };
   });
 }

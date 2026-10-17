@@ -74,6 +74,12 @@ export interface TextObject extends BaseObject {
   background?: string;
   /** True when this box was created by editing text that already existed. */
   replacesSourceText?: boolean;
+  /**
+   * Distance from the box's top edge to the first line's baseline, in points.
+   * Defaults to 80% of the font size. Set when replacing existing text, so the
+   * new words sit on the original baseline instead of floating above it.
+   */
+  baselineOffset?: number;
 }
 
 export interface ImageObject extends BaseObject {

@@ -10,7 +10,31 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PDFDocument } from '@cantoo/pdf-lib';
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { getDocument, Util } from 'pdfjs-dist/legacy/build/pdf.mjs';
+
+/**
+ * Per-item text of a page, with each run's baseline in display space (points
+ * from the top of the page) — enough to check that replacement text lands where
+ * the text it replaced used to sit.
+ */
+async function extractItems(bytes, pageNumber = 1) {
+  const task = getDocument({
+    data: new Uint8Array(bytes),
+    standardFontDataUrl: new URL('../node_modules/pdfjs-dist/standard_fonts/', import.meta.url).pathname,
+  });
+  const pdf = await task.promise;
+  const page = await pdf.getPage(pageNumber);
+  const viewport = page.getViewport({ scale: 1 });
+  const content = await page.getTextContent();
+  const items = content.items
+    .filter((item) => item.str)
+    .map((item) => {
+      const tx = Util.transform(viewport.transform, item.transform);
+      return { str: item.str, baseline: tx[5], x: tx[4], width: item.width };
+    });
+  await task.destroy();
+  return items;
+}
 
 /** Text of every page of a PDF, read the way any other reader would. */
 async function extractText(bytes) {
@@ -195,6 +219,87 @@ try {
     'annotations added in the editor are in the file',
     exportedText[0].includes('Reviewed locally by Paperbox'),
   );
+
+  // ------------------------------------------------- editing existing text
+  {
+    await page.evaluate(() => window.__paperbox.getState().setCurrentPage(0));
+    await page.waitForTimeout(400);
+    await page.getByRole('button', { name: /^Edit existing text/ }).click();
+    const editBox = await page.locator('#page-0 .page__overlay').boundingBox();
+    const scale = editBox.width / 595.28;
+
+    // The sample's title: 26pt bold, drawn at PDF y=760 on an 841.89pt page,
+    // so its baseline sits ~81.9pt from the top in display space.
+    await page.mouse.move(editBox.x + 70 * scale, editBox.y + 70 * scale);
+    await page.waitForTimeout(300);
+    check('hovering highlights the line under the cursor', (await page.locator('#page-0 .text-hover').count()) === 1);
+
+    await page.mouse.click(editBox.x + 70 * scale, editBox.y + 70 * scale);
+    await page.waitForTimeout(400);
+
+    const opened = await page.evaluate(() => {
+      const s = window.__paperbox.getState();
+      const object = s.doc.pages[0].objects.find((o) => o.id === s.editingObjectId);
+      return object
+        ? { text: object.text, bold: object.style.bold, font: object.style.font, size: Math.round(object.style.size), baselineOffset: object.baselineOffset, y: object.y }
+        : null;
+    });
+    check('clicking a line opens it for editing', Boolean(opened), opened ? `"${opened.text}"` : 'nothing opened');
+    check('the box is seeded with the original words', opened?.text === 'Quarterly Report', String(opened?.text));
+    check('a textarea is focused and ready for typing', (await page.locator('#page-0 .obj__textarea').count()) === 1);
+    check(
+      'the original weight and family are matched',
+      opened?.bold === true && opened?.font === 'Helvetica',
+      `${opened?.font}${opened?.bold ? ' bold' : ' regular'} ${opened?.size}pt`,
+    );
+
+    await page.keyboard.press('Control+a');
+    await page.keyboard.type('Annual Report');
+    await page.keyboard.press('Escape');
+    const typed = await page.evaluate(
+      () => window.__paperbox.getState().doc.pages[0].objects.find((o) => o.replacesSourceText)?.text,
+    );
+    check('typing replaces the text', typed === 'Annual Report', String(typed));
+
+    const editDownload = page.waitForEvent('download', { timeout: 90_000 });
+    await page.getByRole('button', { name: 'Export PDF' }).click();
+    const editedBytes = await (await editDownload).saveAs(join(OUT, 'edited-text.pdf')).then(() => readFileSync(join(OUT, 'edited-text.pdf')));
+    const editedItems = await extractItems(editedBytes, 1);
+    const replacement = editedItems.find((item) => item.str.includes('Annual Report'));
+    check('replacement text is written to the file', Boolean(replacement), replacement?.str ?? 'missing');
+    check(
+      'replacement sits on the original baseline',
+      replacement !== undefined && Math.abs(replacement.baseline - 81.89) < 1.5,
+      replacement ? `baseline ${replacement.baseline.toFixed(2)} vs 81.89 expected` : 'n/a',
+    );
+    check(
+      'replacement starts at the original left edge',
+      replacement !== undefined && Math.abs(replacement.x - 60) < 1.5,
+      replacement ? `x ${replacement.x.toFixed(2)} vs 60 expected` : 'n/a',
+    );
+    await shot('07-edited-text');
+
+    // Re-opening an existing box by double-clicking uses the same focus path.
+    await page.evaluate(() => {
+      const s = window.__paperbox.getState();
+      s.selectObjects([]);
+      s.setEditingObject(null);
+    });
+    const reopen = page.locator('#page-0 .obj').filter({ hasText: 'Annual Report' }).first();
+    await reopen.dblclick();
+    await page.waitForTimeout(300);
+    check('double-clicking a text box reopens it for editing', (await page.locator('#page-0 .obj__textarea').count()) === 1);
+    await page.keyboard.press('End');
+    await page.keyboard.type(' 2026');
+    await page.keyboard.press('Escape');
+    const appended = await page.evaluate(
+      () => window.__paperbox.getState().doc.pages[0].objects.find((o) => o.replacesSourceText)?.text,
+    );
+    check('typing into a reopened box appends', appended === 'Annual Report 2026', String(appended));
+
+    await page.keyboard.press('Control+z');
+    await page.waitForTimeout(200);
+  }
 
   // ------------------------------------------------------------- redaction
   // Page 1 must be in view before we can drag on it.

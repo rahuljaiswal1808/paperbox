@@ -399,8 +399,12 @@ async function drawTextObject(
     });
   }
 
-  const lines = layoutText(clean.text, object.style, object.width, (text, size) =>
-    font.widthOfTextAtSize(text, size),
+  const lines = layoutText(
+    clean.text,
+    object.style,
+    object.width,
+    (text, size) => font.widthOfTextAtSize(text, size),
+    object.baselineOffset,
   );
 
   for (const line of lines) {
