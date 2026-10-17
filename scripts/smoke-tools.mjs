@@ -17,6 +17,7 @@ const OUT = process.env.SMOKE_OUT ?? join(root, '.smoke');
 const BASE = process.argv[2] ?? 'http://localhost:4173';
 const SAMPLE = process.env.SAMPLE_PDF ?? join(OUT, 'sample.pdf');
 const TWO_COLUMN = process.env.TWO_COLUMN_PDF ?? join(OUT, 'two-column.pdf');
+const SCANNED = process.env.SCANNED_PDF ?? join(OUT, 'scanned.pdf');
 
 mkdirSync(OUT, { recursive: true });
 
@@ -366,6 +367,42 @@ try {
     );
     await clearEdits();
 
+    // Clicking the instant the page appears, before extraction has finished:
+    // the tool must wait for the text layer, not claim there is no text.
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForTimeout(400);
+    await dismissRecovery();
+    {
+      const quickChooser = page.waitForEvent('filechooser');
+      await page.getByRole('button', { name: 'Open PDF', exact: true }).first().click();
+      (await quickChooser).setFiles(TWO_COLUMN);
+      await page.waitForSelector('#page-0 .page__overlay', { timeout: 30_000 });
+      await page.getByRole('button', { name: /^Edit existing text/ }).click();
+      const quickBox = await page.locator('#page-0 .page__overlay').boundingBox();
+      const quickScale = quickBox.width / 595.28;
+      await page.mouse.click(quickBox.x + 100 * quickScale, quickBox.y + 99 * quickScale);
+      await page.waitForTimeout(700);
+      const immediate = await page.evaluate(() => ({
+        editing: Boolean(window.__paperbox.getState().editingObjectId),
+        toast: document.querySelector('.toasts')?.innerText ?? '',
+      }));
+      check(
+        'clicking before the text layer finishes still opens the line',
+        immediate.editing,
+        immediate.toast.replace(/\n/g, ' ') || 'opened',
+      );
+    }
+
+    // Reopen for the remaining checks.
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForTimeout(400);
+    await dismissRecovery();
+    const reChooser = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: 'Open PDF', exact: true }).first().click();
+    (await reChooser).setFiles(TWO_COLUMN);
+    await page.waitForFunction(() => window.__paperbox?.getState().doc?.pages.length === 1, { timeout: 30_000 });
+    await page.waitForTimeout(1500);
+
     // "Total" and "cost of flat" are separate runs a hair apart: one line.
     const split = await editAt(90, 166);
     check(
@@ -374,6 +411,30 @@ try {
       `"${split?.text}"`,
     );
     await clearEdits();
+  }
+
+  // ------------------------------------------- a page with no text layer
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(400);
+  await dismissRecovery();
+  {
+    const chooser = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: 'Open PDF', exact: true }).first().click();
+    (await chooser).setFiles(SCANNED);
+    await page.waitForFunction(() => window.__paperbox?.getState().doc?.pages.length === 1, { timeout: 30_000 });
+    await page.waitForTimeout(1500);
+
+    const box = await page.locator('#page-0 .page__overlay').boundingBox();
+    const scale = box.width / 595.28;
+    await page.evaluate(() => window.__paperbox.getState().setTool('edit-text'));
+    await page.mouse.click(box.x + 300 * scale, box.y + 300 * scale);
+    await page.waitForTimeout(600);
+    const toast = await page.evaluate(() => document.querySelector('.toasts')?.innerText ?? '');
+    check(
+      'a scanned page says so instead of "no text here"',
+      /no text layer/i.test(toast),
+      toast.replace(/\n/g, ' ').slice(0, 90),
+    );
   }
 
   const realErrors = consoleErrors.filter((t) => !/favicon|manifest|sw\.js|DevTools/i.test(t));

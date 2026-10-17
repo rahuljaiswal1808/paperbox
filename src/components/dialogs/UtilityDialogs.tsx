@@ -204,6 +204,12 @@ export function AboutDialog() {
         <strong>Paperbox</strong> is a complete PDF workspace that runs on your machine. It is a
         browser application with no backend: open a file, work on it, export it.
       </p>
+      <p className="small muted">
+        Build <code className="mono">{__BUILD_ID__}</code>
+        <br />
+        If that does not match the latest commit, your browser is still serving a cached copy:
+        reload twice, or clear this site&rsquo;s data.
+      </p>
       <div className="panel__title">Built with</div>
       <ul className="small">
         <li>React + TypeScript, bundled by Vite</li>

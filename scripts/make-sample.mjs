@@ -4,7 +4,7 @@
  * text used to prove redaction destroys content.
  */
 import { PDFDocument, StandardFonts, rgb, degrees } from '@cantoo/pdf-lib';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -82,3 +82,11 @@ tablePage.drawText('4447250', { x: 360, y: splitY, size: SIZE, font: tableFont, 
 
 writeFileSync(join(out, 'two-column.pdf'), await table.save());
 console.log(`[sample] wrote ${join(out, 'two-column.pdf')}`);
+
+/** A page with no text layer at all, standing in for a scan. */
+const scan = await PDFDocument.create();
+const png = await scan.embedPng(readFileSync(join(root, 'public', 'icon-512.png')));
+const scanPage = scan.addPage([595.28, 841.89]);
+scanPage.drawImage(png, { x: 48, y: 300, width: 499, height: 499 });
+writeFileSync(join(out, 'scanned.pdf'), await scan.save());
+console.log(`[sample] wrote ${join(out, 'scanned.pdf')}`);

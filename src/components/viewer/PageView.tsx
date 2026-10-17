@@ -16,6 +16,7 @@ import { usePageText } from '../../app/hooks';
 import { boundsOfPoints, rectFromPoints, rectsIntersect, viewRect } from '../../lib/pdf/geometry';
 import { itemsInRect, type TextItem } from '../../lib/pdf/text';
 import { guessTextStyle } from '../../lib/pdf/measure';
+import { getPageText } from '../../lib/pdf/pageTextCache';
 import { uid } from '../../lib/util/misc';
 import { PageCanvas } from './PageCanvas';
 import { ObjectView } from './ObjectView';
@@ -47,7 +48,7 @@ export function PageView({ doc, page, pageIndex, zoom, visible, isCurrent }: Pag
   const pageText = usePageText(visible ? page : null);
 
   const overlayRef = useRef<HTMLDivElement>(null);
-  const pendingEdit = useRef<TextLine | null>(null);
+  const pendingEdit = useRef<Point | null>(null);
   const [draft, setDraft] = useState<
     | { kind: 'rect'; from: Point; to: Point }
     | { kind: 'ink'; points: Point[] }
@@ -145,25 +146,62 @@ export function PageView({ doc, page, pageIndex, zoom, visible, isCurrent }: Pag
         store.getState().setTool('select');
         break;
       }
-      case 'edit-text': {
-        const line = pageText ? findTextLine(pageText.items, point) : null;
-        if (!line) {
-          useUiStore.getState().toast({
-            kind: 'info',
-            title: 'No text here',
-            detail: 'Click directly on a line of existing text to edit it.',
-          });
-          return;
-        }
-        // Created on pointer *up*: the browser assigns focus from the pointer
+      case 'edit-text':
+        // Resolved on pointer *up*: the browser assigns focus from the pointer
         // gesture, and anything we focus before it settles gets blurred again.
-        pendingEdit.current = line;
+        // The text layer may still be extracting, so the point is all we keep.
+        pendingEdit.current = point;
         break;
-      }
       default:
         setDraft({ kind: 'rect', from: point, to: point });
         break;
     }
+  };
+
+  /**
+   * Open the text under `point` for editing.
+   *
+   * Extraction is asynchronous, and a page the user has only just opened may
+   * still be mid-extraction — waiting for it here is the difference between
+   * "nothing happens when I click" and the tool simply working. The three ways
+   * this can come up empty are genuinely different problems, so each says so.
+   */
+  const openTextForEditing = async (point: Point) => {
+    let text = pageText;
+    if (!text) {
+      try {
+        text = await getPageText(doc, page);
+      } catch (error) {
+        useUiStore.getState().toast({
+          kind: 'error',
+          title: 'Could not read this page\u2019s text',
+          detail: (error as Error).message,
+        });
+        return;
+      }
+    }
+
+    if (text.items.length === 0) {
+      useUiStore.getState().toast({
+        kind: 'warning',
+        title: 'This page has no text layer',
+        detail:
+          'It is a scan or an image, so there are no characters to edit. Add a text box over it instead, or run OCR first.',
+      });
+      return;
+    }
+
+    const line = findTextLine(text.items, point);
+    if (!line) {
+      useUiStore.getState().toast({
+        kind: 'info',
+        title: 'No text at that spot',
+        detail: 'Hover until a line is outlined, then click it.',
+      });
+      return;
+    }
+
+    replaceTextLine(line);
   };
 
   /**
@@ -226,10 +264,10 @@ export function PageView({ doc, page, pageIndex, zoom, visible, isCurrent }: Pag
   };
 
   const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const line = pendingEdit.current;
-    if (line) {
+    const editPoint = pendingEdit.current;
+    if (editPoint) {
       pendingEdit.current = null;
-      replaceTextLine(line);
+      void openTextForEditing(editPoint);
       return;
     }
     if (!draft) return;

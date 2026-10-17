@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -16,8 +17,29 @@ const base = (() => {
   return raw.endsWith('/') ? raw : `${raw}/`;
 })();
 
+/**
+ * A stamp the running app can show, so "am I on the new build?" is answerable
+ * from the About dialog instead of by guessing at caches.
+ */
+const buildId = (() => {
+  const sha =
+    process.env.GITHUB_SHA ??
+    (() => {
+      try {
+        return execSync('git rev-parse HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+          .toString()
+          .trim();
+      } catch {
+        return '';
+      }
+    })();
+  const date = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  return `${sha ? sha.slice(0, 7) : 'dev'} · ${date} UTC`;
+})();
+
 export default defineConfig({
   base,
+  define: { __BUILD_ID__: JSON.stringify(buildId) },
   plugins: [
     react(),
     VitePWA({
