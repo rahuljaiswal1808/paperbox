@@ -38,3 +38,47 @@ for (let i = 0; i < 4; i += 1) {
 
 writeFileSync(join(out, 'sample.pdf'), await doc.save());
 console.log(`[sample] wrote ${join(out, 'sample.pdf')}`);
+
+/**
+ * A second fixture shaped like a real statement or receipt: small 8pt type in
+ * two columns, padded with runs of spaces the way such files usually are, plus
+ * one label deliberately split across two text runs. These are what break naive
+ * line detection — the columns must stay separate while the split label joins.
+ */
+const table = await PDFDocument.create();
+const tableFont = await table.embedFont(StandardFonts.Helvetica);
+const tablePage = table.addPage([595.28, 841.89]);
+table.setTitle('Two column receipt');
+
+const ROWS = [
+  ['Reference Number', 'SC1217915292157'],
+  ['Merchant Name', 'Example Buyers Project'],
+  ['Flat/Unit Number', 'K0605'],
+  ['Amount Being Paid Now', '168407'],
+  ['Payment Category', 'Installment'],
+];
+
+const SIZE = 8;
+ROWS.forEach(([label, value], index) => {
+  const y = 740 - index * 13.6;
+  tablePage.drawText(label, { x: 72, y, size: SIZE, font: tableFont, color: rgb(0.1, 0.1, 0.1) });
+  // The padding run that, left in the line, would glue the columns together.
+  const labelWidth = tableFont.widthOfTextAtSize(label, SIZE);
+  tablePage.drawText(' '.repeat(60), { x: 72 + labelWidth, y, size: SIZE, font: tableFont });
+  tablePage.drawText(value, { x: 360, y, size: SIZE, font: tableFont, color: rgb(0.1, 0.1, 0.1) });
+});
+
+// A label split into two runs a hair apart: these belong to one line.
+const splitY = 740 - ROWS.length * 13.6;
+tablePage.drawText('Total', { x: 72, y: splitY, size: SIZE, font: tableFont, color: rgb(0.1, 0.1, 0.1) });
+tablePage.drawText('cost of flat', {
+  x: 72 + tableFont.widthOfTextAtSize('Total ', SIZE),
+  y: splitY,
+  size: SIZE,
+  font: tableFont,
+  color: rgb(0.1, 0.1, 0.1),
+});
+tablePage.drawText('4447250', { x: 360, y: splitY, size: SIZE, font: tableFont, color: rgb(0.1, 0.1, 0.1) });
+
+writeFileSync(join(out, 'two-column.pdf'), await table.save());
+console.log(`[sample] wrote ${join(out, 'two-column.pdf')}`);

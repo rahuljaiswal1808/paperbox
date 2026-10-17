@@ -543,33 +543,100 @@ interface TextLine {
   fontFamily?: string;
 }
 
-/** The text line under the pointer, merged across items on the same baseline. */
-function findTextLine(items: TextItem[], point: Point): TextLine | null {
-  const hit = items.find(
-    (item) =>
-      point.x >= item.rect.x - 2 &&
-      point.x <= item.rect.x + item.rect.width + 2 &&
-      point.y >= item.rect.y - 2 &&
-      point.y <= item.rect.y + item.rect.height + 2,
-  );
-  if (!hit) return null;
+/**
+ * The run of text under the pointer.
+ *
+ * Two things make this less obvious than it looks on real documents:
+ *
+ *  - Body text is often 8pt, so the glyph band is a thin target and more than
+ *    half the space between baselines belongs to no item at all. A click that
+ *    lands in the leading snaps to the nearest line instead of missing.
+ *  - Sharing a baseline does not make two items one line. In a two-column
+ *    statement or a table row, a label on the left and its value on the right
+ *    sit on the same baseline but are separate runs; merging them would mangle
+ *    both. Only horizontally adjacent items join up.
+ */
+function findTextLine(allItems: TextItem[], point: Point): TextLine | null {
+  // PDFs frequently pad between columns with runs of spaces. Those carry no
+  // glyphs, but left in they would bridge the gap and glue the columns back
+  // together, so they are excluded from both hit-testing and merging — the
+  // space they occupy then simply reads as the gap it is.
+  const items = allItems.filter((item) => item.str.trim().length > 0);
 
-  const sameLine = items
-    .filter((item) => Math.abs(item.baseline - hit.baseline) < Math.max(2, hit.fontSize * 0.35))
+  const contains = (item: TextItem) =>
+    point.x >= item.rect.x - 2 &&
+    point.x <= item.rect.x + item.rect.width + 2 &&
+    point.y >= item.rect.y - 2 &&
+    point.y <= item.rect.y + item.rect.height + 2;
+
+  let hit = items.find(contains);
+
+  if (!hit) {
+    // Nearest line whose horizontal span covers the pointer, within a line or so.
+    let bestDistance = Infinity;
+    for (const item of items) {
+      if (
+        point.x < item.rect.x - item.fontSize ||
+        point.x > item.rect.x + item.rect.width + item.fontSize
+      ) {
+        continue;
+      }
+      const top = item.rect.y;
+      const bottom = top + item.rect.height;
+      const distance = point.y < top ? top - point.y : point.y > bottom ? point.y - bottom : 0;
+      if (distance < bestDistance && distance <= item.fontSize * 0.9) {
+        bestDistance = distance;
+        hit = item;
+      }
+    }
+  }
+
+  if (!hit) return null;
+  const anchor = hit;
+
+  const sameBaseline = items
+    .filter((item) => Math.abs(item.baseline - anchor.baseline) < Math.max(1, anchor.fontSize * 0.3))
     .sort((a, b) => a.rect.x - b.rect.x);
 
+  // Grow outwards from the clicked item while neighbours stay close enough to
+  // be the same run. A column gap is many times wider than a word space.
+  const maxGap = anchor.fontSize * 1.5;
+  const start = sameBaseline.indexOf(anchor);
+  const run: TextItem[] = [anchor];
+  const gapBetween = (left: TextItem, right: TextItem) =>
+    right.rect.x - (left.rect.x + left.rect.width);
+
+  for (let i = start - 1; i >= 0; i -= 1) {
+    if (gapBetween(sameBaseline[i], run[0]) > maxGap) break;
+    run.unshift(sameBaseline[i]);
+  }
+  for (let i = start + 1; i < sameBaseline.length; i += 1) {
+    if (gapBetween(run[run.length - 1], sameBaseline[i]) > maxGap) break;
+    run.push(sameBaseline[i]);
+  }
+
+  let text = '';
+  run.forEach((item, index) => {
+    if (index > 0) {
+      const gap = gapBetween(run[index - 1], item);
+      const spaced = text.endsWith(' ') || item.str.startsWith(' ');
+      if (gap > anchor.fontSize * 0.12 && !spaced) text += ' ';
+    }
+    text += item.str;
+  });
+
   const bounds = boundsOfPoints(
-    sameLine.flatMap((item) => [
+    run.flatMap((item) => [
       { x: item.rect.x, y: item.rect.y },
       { x: item.rect.x + item.rect.width, y: item.rect.y + item.rect.height },
     ]),
   );
 
   return {
-    text: sameLine.map((item) => item.str).join(''),
+    text,
     rect: bounds,
-    fontSize: hit.fontSize,
-    baseline: hit.baseline,
-    fontFamily: hit.fontFamily,
+    fontSize: anchor.fontSize,
+    baseline: anchor.baseline,
+    fontFamily: anchor.fontFamily,
   };
 }

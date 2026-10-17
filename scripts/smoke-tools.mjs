@@ -16,6 +16,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = process.env.SMOKE_OUT ?? join(root, '.smoke');
 const BASE = process.argv[2] ?? 'http://localhost:4173';
 const SAMPLE = process.env.SAMPLE_PDF ?? join(OUT, 'sample.pdf');
+const TWO_COLUMN = process.env.TWO_COLUMN_PDF ?? join(OUT, 'two-column.pdf');
 
 mkdirSync(OUT, { recursive: true });
 
@@ -304,6 +305,75 @@ try {
       await page.waitForFunction(() => window.__paperbox?.getState().doc?.pages.length === 4, { timeout: 30_000 });
       check('correct password opens the document', true);
     }
+  }
+
+  // ------------------------------- editing text in a two-column document
+  // Statements and receipts put a label and its value on the same baseline,
+  // padded with a run of spaces. Both must stay editable on their own.
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(400);
+  await dismissRecovery();
+  {
+    const chooser = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: 'Open PDF', exact: true }).first().click();
+    (await chooser).setFiles(TWO_COLUMN);
+    await page.waitForFunction(() => window.__paperbox?.getState().doc?.pages.length === 1, { timeout: 30_000 });
+    await page.waitForTimeout(1500);
+
+    const box = await page.locator('#page-0 .page__overlay').boundingBox();
+    const scale = box.width / 595.28;
+    const editAt = async (xPt, yPt) => {
+      await page.evaluate(() => window.__paperbox.getState().setTool('edit-text'));
+      await page.mouse.click(box.x + xPt * scale, box.y + yPt * scale);
+      await page.waitForTimeout(200);
+      return page.evaluate(() => {
+        const s = window.__paperbox.getState();
+        const o = s.doc.pages[0].objects.at(-1);
+        return o ? { text: o.text, x: Math.round(o.x), width: Math.round(o.width), editing: Boolean(s.editingObjectId) } : null;
+      });
+    };
+    const clearEdits = () =>
+      page.evaluate(() => {
+        const s = window.__paperbox.getState();
+        s.setEditingObject(null);
+        const ids = s.doc.pages[0].objects.map((o) => o.id);
+        if (ids.length) s.removeObjects(ids);
+      });
+
+    // Row one sits on baseline 101.9; click just above it in each column.
+    const label = await editAt(100, 99);
+    check(
+      'a label edits without swallowing its column neighbour',
+      label?.text === 'Reference Number' && label.width < 110,
+      `"${label?.text}" ${label?.width}pt wide`,
+    );
+    await clearEdits();
+
+    const value = await editAt(390, 99);
+    check(
+      'the value in the next column edits on its own',
+      value?.text === 'SC1217915292157' && value.x > 300,
+      `"${value?.text}" at x=${value?.x}`,
+    );
+    await clearEdits();
+
+    // Between baselines 101.9 and 115.5 — the leading, which covers no glyphs.
+    const leading = await editAt(100, 108);
+    check(
+      'clicking the gap between lines still finds a line',
+      Boolean(leading?.editing),
+      leading ? `"${leading.text}"` : 'nothing opened',
+    );
+    await clearEdits();
+
+    // "Total" and "cost of flat" are separate runs a hair apart: one line.
+    const split = await editAt(90, 166);
+    check(
+      'runs split only by kerning are edited as one line',
+      split?.text === 'Total cost of flat',
+      `"${split?.text}"`,
+    );
+    await clearEdits();
   }
 
   const realErrors = consoleErrors.filter((t) => !/favicon|manifest|sw\.js|DevTools/i.test(t));
