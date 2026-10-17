@@ -116,10 +116,16 @@ export async function drawObjectOnCanvas(
       ctx.font = font;
       ctx.fillStyle = style.color;
       ctx.textBaseline = 'alphabetic';
-      const lines = layoutText(object.text, style, object.width, (text, size) => {
-        ctx.font = `${style.italic ? 'italic ' : ''}${style.bold ? 'bold ' : ''}${size * scale}px ${cssFontFamily(style.font)}`;
-        return ctx.measureText(text).width / scale;
-      });
+      const lines = layoutText(
+        object.text,
+        style,
+        object.width,
+        (text, size) => {
+          ctx.font = `${style.italic ? 'italic ' : ''}${style.bold ? 'bold ' : ''}${size * scale}px ${cssFontFamily(style.font)}`;
+          return ctx.measureText(text).width / scale;
+        },
+        object.baselineOffset,
+      );
       ctx.font = font;
       for (const line of lines) {
         if (!line.text) continue;

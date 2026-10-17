@@ -14,7 +14,8 @@ import { usePlacementStore } from '../../state/placementStore';
 import { useSearchStore } from '../../state/searchStore';
 import { usePageText } from '../../app/hooks';
 import { boundsOfPoints, rectFromPoints, rectsIntersect, viewRect } from '../../lib/pdf/geometry';
-import { itemsInRect } from '../../lib/pdf/text';
+import { itemsInRect, type TextItem } from '../../lib/pdf/text';
+import { guessTextStyle } from '../../lib/pdf/measure';
 import { uid } from '../../lib/util/misc';
 import { PageCanvas } from './PageCanvas';
 import { ObjectView } from './ObjectView';
@@ -46,6 +47,7 @@ export function PageView({ doc, page, pageIndex, zoom, visible, isCurrent }: Pag
   const pageText = usePageText(visible ? page : null);
 
   const overlayRef = useRef<HTMLDivElement>(null);
+  const pendingEdit = useRef<TextLine | null>(null);
   const [draft, setDraft] = useState<
     | { kind: 'rect'; from: Point; to: Point }
     | { kind: 'ink'; points: Point[] }
@@ -144,8 +146,8 @@ export function PageView({ doc, page, pageIndex, zoom, visible, isCurrent }: Pag
         break;
       }
       case 'edit-text': {
-        const item = pageText ? findTextLine(pageText.items, point) : null;
-        if (!item) {
+        const line = pageText ? findTextLine(pageText.items, point) : null;
+        if (!line) {
           useUiStore.getState().toast({
             kind: 'info',
             title: 'No text here',
@@ -153,44 +155,58 @@ export function PageView({ doc, page, pageIndex, zoom, visible, isCurrent }: Pag
           });
           return;
         }
-        commitObject(
-          {
-            id: uid('text'),
-            kind: 'text',
-            text: item.text,
-            replacesSourceText: true,
-            background: '#ffffff',
-            style: {
-              size: item.fontSize,
-              color: '#111827',
-              font: settings.fontFamily,
-              bold: false,
-              italic: false,
-              align: 'left',
-              lineHeight: 1.15,
-            },
-            x: item.rect.x,
-            y: item.rect.y,
-            width: Math.max(24, item.rect.width + 6),
-            height: Math.max(item.fontSize * 1.3, item.rect.height),
-            rotation: 0,
-          },
-          'Edit existing text',
-        );
-        // `setTool` clears the editing target, so switch tools *before* opening
-        // the editor on the new box.
-        store.getState().setTool('select');
-        const created = store.getState().doc?.pages[pageIndex].objects.at(-1);
-        if (created) {
-          store.getState().selectObjects([created.id]);
-          store.getState().setEditingObject(created.id);
-        }
+        // Created on pointer *up*: the browser assigns focus from the pointer
+        // gesture, and anything we focus before it settles gets blurred again.
+        pendingEdit.current = line;
         break;
       }
       default:
         setDraft({ kind: 'rect', from: point, to: point });
         break;
     }
+  };
+
+  /**
+   * Lay an editable box over a line of the source PDF: same position, same
+   * baseline, and the closest match we can measure for family and weight.
+   */
+  const replaceTextLine = (line: TextLine) => {
+    const guess = guessTextStyle(line.text, line.rect.width, line.fontSize, line.fontFamily);
+    const id = uid('text');
+    const top = line.rect.y;
+    // Cover the glyphs from their top down past the descenders.
+    const height = Math.max(line.fontSize * 1.1, line.baseline + line.fontSize * 0.25 - top);
+
+    commitObject(
+      {
+        id,
+        kind: 'text',
+        text: line.text,
+        replacesSourceText: true,
+        background: '#ffffff',
+        baselineOffset: line.baseline - top,
+        style: {
+          size: line.fontSize,
+          color: '#111827',
+          font: guess.font,
+          bold: guess.bold,
+          italic: false,
+          align: 'left',
+          lineHeight: 1.15,
+        },
+        x: line.rect.x,
+        y: top,
+        width: Math.max(24, line.rect.width + line.fontSize * 0.6),
+        height,
+        rotation: 0,
+      },
+      'Edit existing text',
+    );
+
+    // `setTool` clears the editing target, so switch tools before opening it.
+    store.getState().setTool('select');
+    store.getState().selectObjects([id]);
+    store.getState().setEditingObject(id);
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -210,6 +226,12 @@ export function PageView({ doc, page, pageIndex, zoom, visible, isCurrent }: Pag
   };
 
   const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const line = pendingEdit.current;
+    if (line) {
+      pendingEdit.current = null;
+      replaceTextLine(line);
+      return;
+    }
     if (!draft) return;
     const point = toPagePoint(event);
 
@@ -512,11 +534,17 @@ function DraftRect({
   );
 }
 
+interface TextLine {
+  text: string;
+  rect: Rect;
+  fontSize: number;
+  /** Display-space y of the line's baseline. */
+  baseline: number;
+  fontFamily?: string;
+}
+
 /** The text line under the pointer, merged across items on the same baseline. */
-function findTextLine(
-  items: { str: string; rect: Rect; fontSize: number }[],
-  point: Point,
-): { text: string; rect: Rect; fontSize: number } | null {
+function findTextLine(items: TextItem[], point: Point): TextLine | null {
   const hit = items.find(
     (item) =>
       point.x >= item.rect.x - 2 &&
@@ -527,11 +555,7 @@ function findTextLine(
   if (!hit) return null;
 
   const sameLine = items
-    .filter(
-      (item) =>
-        Math.abs(item.rect.y + item.rect.height - (hit.rect.y + hit.rect.height)) <
-        Math.max(2, hit.fontSize * 0.35),
-    )
+    .filter((item) => Math.abs(item.baseline - hit.baseline) < Math.max(2, hit.fontSize * 0.35))
     .sort((a, b) => a.rect.x - b.rect.x);
 
   const bounds = boundsOfPoints(
@@ -545,5 +569,7 @@ function findTextLine(
     text: sameLine.map((item) => item.str).join(''),
     rect: bounds,
     fontSize: hit.fontSize,
+    baseline: hit.baseline,
+    fontFamily: hit.fontFamily,
   };
 }

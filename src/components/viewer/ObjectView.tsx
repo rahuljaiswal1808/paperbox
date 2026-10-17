@@ -45,6 +45,8 @@ export function ObjectView({
 }: ObjectViewProps) {
   const store = useEditorStore;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  /** When edit mode opened, used to ignore the browser's own focus shuffle. */
+  const editingSince = useRef(0);
   const gesture = useRef<{
     mode: 'move' | 'resize' | 'rotate';
     handle?: HandleId;
@@ -53,10 +55,15 @@ export function ObjectView({
   } | null>(null);
 
   useEffect(() => {
-    if (editing && textareaRef.current) {
-      textareaRef.current.focus();
-      textareaRef.current.select();
-    }
+    if (!editing) return;
+    editingSince.current = Date.now();
+    // The browser assigns focus from the pointer event *after* React commits,
+    // so claim it on the next frame or it lands on the scroll container.
+    const frame = requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.select();
+    });
+    return () => cancelAnimationFrame(frame);
   }, [editing]);
 
   const beginGesture = (
@@ -171,6 +178,7 @@ export function ObjectView({
         zoom={zoom}
         editing={editing}
         textareaRef={textareaRef}
+        editingSince={editingSince}
         pageIndex={pageIndex}
         page={page}
       />
@@ -207,6 +215,26 @@ export function ObjectView({
   );
 }
 
+/** Ascent/descent of the CSS stand-ins for the three standard font families. */
+const FONT_METRICS: Record<string, { ascent: number; descent: number }> = {
+  Helvetica: { ascent: 0.905, descent: 0.212 },
+  Times: { ascent: 0.891, descent: 0.216 },
+  Courier: { ascent: 0.833, descent: 0.3 },
+};
+
+/**
+ * Top padding that drops the DOM text's first baseline onto `baselineOffset`,
+ * so what the user types lines up with what the exporter will write.
+ */
+function domBaselinePadding(object: Extract<PageObject, { kind: 'text' }>, zoom: number): number {
+  if (object.baselineOffset === undefined) return 0;
+  const { size, lineHeight } = object.style;
+  const metrics = FONT_METRICS[object.style.font] ?? FONT_METRICS.Helvetica;
+  const cssBaseline =
+    (size * lineHeight - size * (metrics.ascent + metrics.descent)) / 2 + size * metrics.ascent;
+  return Math.max(0, (object.baselineOffset - cssBaseline) * zoom);
+}
+
 function describeObject(object: PageObject): string {
   switch (object.kind) {
     case 'text':
@@ -238,9 +266,10 @@ interface ObjectBodyProps {
   zoom: number;
   editing: boolean;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  editingSince: React.RefObject<number>;
 }
 
-function ObjectBody({ doc, object, zoom, editing, textareaRef }: ObjectBodyProps) {
+function ObjectBody({ doc, object, zoom, editing, textareaRef, editingSince }: ObjectBodyProps) {
   const updateObject = useEditorStore((state) => state.updateObject);
   const setEditingObject = useEditorStore((state) => state.setEditingObject);
 
@@ -256,6 +285,7 @@ function ObjectBody({ doc, object, zoom, editing, textareaRef }: ObjectBodyProps
         color: style.color,
         textAlign: style.align,
         background: object.background ?? 'transparent',
+        paddingTop: domBaselinePadding(object, zoom),
       };
       if (editing) {
         return (
@@ -267,7 +297,16 @@ function ObjectBody({ doc, object, zoom, editing, textareaRef }: ObjectBodyProps
             aria-label="Edit text"
             onChange={(event) => updateObject(object.id, { text: event.target.value })}
             onFocus={() => useEditorStore.getState().pushHistory('Edit text')}
-            onBlur={() => setEditingObject(null)}
+            onBlur={(event) => {
+              // A blur with no incoming element, right after opening, is the
+              // browser moving focus to the scroll container — not the user
+              // leaving the field. Take focus back instead of closing.
+              if (!event.relatedTarget && Date.now() - editingSince.current < 600) {
+                requestAnimationFrame(() => textareaRef.current?.focus());
+                return;
+              }
+              setEditingObject(null);
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Escape') {
                 event.preventDefault();

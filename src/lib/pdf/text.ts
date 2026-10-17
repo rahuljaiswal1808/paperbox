@@ -17,6 +17,10 @@ export interface TextItem {
   rect: Rect;
   /** Approximate font size in points. */
   fontSize: number;
+  /** Display-space y of the text baseline — where replacement text must sit. */
+  baseline: number;
+  /** pdf.js's coarse family guess: "serif", "sans-serif" or "monospace". */
+  fontFamily?: string;
   /** Clockwise rotation of the text run, in degrees. */
   angle: number;
   /** Per-character x offsets along the run, in points (length = str.length + 1). */
@@ -69,6 +73,10 @@ export async function extractPageText(page: PDFPageProxy, rotation?: number): Pr
       str: item.str,
       rect: boundsOfPoints(corners),
       fontSize: fontHeight,
+      // `origin` is the baseline-left of the run, which is exactly where a
+      // replacement for this text has to put its own baseline.
+      baseline: origin.y,
+      fontFamily: content.styles?.[item.fontName]?.fontFamily,
       angle: (angle * 180) / Math.PI,
       offsets,
       hasEol: Boolean(item.hasEOL),
