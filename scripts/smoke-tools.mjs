@@ -10,6 +10,7 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PDFDocument } from '@cantoo/pdf-lib';
+import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { unzipSync } from 'fflate';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -20,6 +21,22 @@ const TWO_COLUMN = process.env.TWO_COLUMN_PDF ?? join(OUT, 'two-column.pdf');
 const SCANNED = process.env.SCANNED_PDF ?? join(OUT, 'scanned.pdf');
 
 mkdirSync(OUT, { recursive: true });
+
+/** Text of every page, read back the way any other PDF reader would. */
+async function extractText(bytes) {
+  const task = getDocument({
+    data: new Uint8Array(bytes),
+    standardFontDataUrl: new URL('../node_modules/pdfjs-dist/standard_fonts/', import.meta.url).pathname,
+  });
+  const pdf = await task.promise;
+  const pages = [];
+  for (let i = 1; i <= pdf.numPages; i += 1) {
+    const page = await pdf.getPage(i);
+    pages.push((await page.getTextContent()).items.map((item) => item.str ?? '').join(' '));
+  }
+  await task.destroy();
+  return pages;
+}
 
 const results = [];
 const check = (name, ok, detail = '') => {
@@ -411,6 +428,31 @@ try {
       `"${split?.text}"`,
     );
     await clearEdits();
+  }
+
+  // ------------------------------- symbols the standard fonts cannot encode
+  // The 14 built-in PDF fonts have no rupee sign; it must degrade to something
+  // readable rather than to "?", which looks like a corrupted file.
+  {
+    const box = await page.locator('#page-0 .page__overlay').boundingBox();
+    const scale = box.width / 595.28;
+    await page.getByRole('button', { name: /^Text box/ }).click();
+    await page.mouse.move(box.x + 80 * scale, box.y + 400 * scale);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 300 * scale, box.y + 425 * scale);
+    await page.mouse.up();
+    await page.keyboard.type('Budget ₹40 Cr → approved');
+    await page.keyboard.press('Escape');
+
+    const download = page.waitForEvent('download', { timeout: 90_000 });
+    await page.getByRole('button', { name: 'Export PDF' }).click();
+    const bytes = await saveDownload(download, 'symbols.pdf');
+    const text = (await extractText(bytes)).join(' ');
+    check(
+      'unencodable symbols degrade readably, not to "?"',
+      text.includes('Rs40 Cr') && text.includes('->') && !text.includes('?40'),
+      text.match(/Budget[^\n]{0,30}/)?.[0] ?? 'not found',
+    );
   }
 
   // ------------------------------------------- a page with no text layer

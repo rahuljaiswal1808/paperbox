@@ -39,7 +39,16 @@ const REPLACEMENTS: [RegExp, string][] = [
   [/[     ]/g, ' '],
   [/[•●▪]/g, '-'],
   [/™/g, '(TM)'],
-  [/€/g, 'EUR'],
+  // The 14 standard fonts predate these symbols entirely. A readable stand-in
+  // beats the "?" that an unencodable character would otherwise become.
+  [/[₹₨]/g, 'Rs'],
+  [/₺/g, 'TL'],
+  [/[₽]/g, 'RUB'],
+  [/[元円]/g, 'JPY'],
+  [/→/g, '->'],
+  [/←/g, '<-'],
+  [/[×]/g, 'x'],
+  [/[−–]/g, '-'],
   [/[​-‍﻿]/g, ''],
 ];
 

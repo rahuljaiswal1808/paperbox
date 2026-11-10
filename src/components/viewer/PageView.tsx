@@ -13,7 +13,7 @@ import { useUiStore } from '../../state/uiStore';
 import { usePlacementStore } from '../../state/placementStore';
 import { useSearchStore } from '../../state/searchStore';
 import { usePageText } from '../../app/hooks';
-import { boundsOfPoints, rectFromPoints, rectsIntersect, viewRect } from '../../lib/pdf/geometry';
+import { boundsOfPoints, rectContains, rectFromPoints, rectsIntersect, viewRect } from '../../lib/pdf/geometry';
 import { itemsInRect, type TextItem } from '../../lib/pdf/text';
 import { guessTextStyle } from '../../lib/pdf/measure';
 import { getPageText } from '../../lib/pdf/pageTextCache';
@@ -29,6 +29,9 @@ interface PageViewProps {
   visible: boolean;
   isCurrent: boolean;
 }
+
+/** The "that text belongs to the PDF" hint is worth saying once, not every click. */
+let sourceTextHintShown = false;
 
 const MARKUP_TOOLS: Record<string, MarkupKind> = {
   highlight: 'highlight',
@@ -122,6 +125,7 @@ export function PageView({ doc, page, pageIndex, zoom, visible, isCurrent }: Pag
         store.getState().selectObjects([]);
         store.getState().setEditingObject(null);
         setDraft({ kind: 'marquee', from: point, to: point });
+        void hintSourceText(point);
         break;
       case 'ink':
         setDraft({ kind: 'ink', points: [point] });
@@ -156,6 +160,33 @@ export function PageView({ doc, page, pageIndex, zoom, visible, isCurrent }: Pag
         setDraft({ kind: 'rect', from: point, to: point });
         break;
     }
+  };
+
+  /**
+   * Clicking the PDF's own words with the select tool does nothing, because
+   * they are not objects — which reads as "it doesn't detect the text". Say
+   * once where that text actually lives and which tools act on it.
+   */
+  const hintSourceText = async (point: Point) => {
+    if (sourceTextHintShown) return;
+    if (page.objects.some((object) => rectContains(object, point))) return;
+    let text = pageText;
+    if (!text) {
+      try {
+        text = await getPageText(doc, page);
+      } catch {
+        return;
+      }
+    }
+    if (!findTextLine(text.items, point)) return;
+    sourceTextHintShown = true;
+    useUiStore.getState().toast({
+      kind: 'info',
+      title: 'That text is part of the PDF itself',
+      detail:
+        'Press E (Edit existing text) to retype it, or R (Redact) to remove it permanently. The select tool only moves things you have added.',
+      timeout: 9000,
+    });
   };
 
   /**
