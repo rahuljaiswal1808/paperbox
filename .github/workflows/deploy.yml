@@ -59,3 +59,29 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+      # A green deploy does not prove the site serves what we built. If Pages is
+      # set to "Deploy from a branch" the repository root is published instead,
+      # so visitors get the unbuilt index.html — which references /src/main.tsx,
+      # loads nothing, and looks like a broken app rather than a misconfigured
+      # one. Check the published page and fail loudly if that is what is live.
+      - name: Verify the published site is the built app
+        run: |
+          url="${{ steps.deployment.outputs.page_url }}"
+          echo "Checking $url"
+          for attempt in 1 2 3 4 5 6; do
+            body=$(curl -fsSL --max-time 30 "$url" || true)
+            if printf '%s' "$body" | grep -q 'assets/index-.*\.js'; then
+              echo "OK: the built bundle is being served."
+              exit 0
+            fi
+            echo "attempt $attempt: not serving the built bundle yet, waiting..."
+            sleep 10
+          done
+          echo "::error::$url is not serving the built app."
+          if printf '%s' "$body" | grep -q 'src/main.tsx'; then
+            echo "::error::It is serving the repository's raw source instead."
+            echo "::error::Set Settings -> Pages -> Build and deployment -> Source to 'GitHub Actions'."
+          fi
+          printf '%s' "$body" | head -c 600
+          exit 1
